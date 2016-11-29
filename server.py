@@ -56,6 +56,9 @@ def getPackets(filename, start_index, end_index, isFileReadComplete):
     with open(filename) as fin:
         fin.seek(start_index)
         data = fin.read(end_index - start_index)
+        
+    if '.jpg' in filename:
+        data = data.encode('hex')
 
     return data, isFileReadComplete
 
@@ -96,15 +99,16 @@ while True:
         #Look for file requested and send to client
         filename = data
         fileSize = os.path.getsize(filename)
-        isFirstIteration = False
+        
     
     sequenceNumber = 1
     
     while sequenceNumber <= 5:
     
-        if sequenceNumber == 1:
+        if isFirstIteration:
             start_index = 0
             end_index = data_size
+            isFirstIteration = False
         else:
             start_index += data_size
             end_index += data_size
@@ -138,9 +142,7 @@ while True:
         
         sequenceNumber, packetNumber = checkFailedPacketResponse(sequenceNumber, packetNumber)
         
-        if isFileReadComplete and not recievedFailedPacket:
-            break
-    if isFileReadComplete and not recievedFailedPacket:
+        if isFileReadComplete == True:
             break
     
 
