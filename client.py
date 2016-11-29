@@ -25,17 +25,31 @@ received_packets = []
 
 client_socket.sendto(filename, server_address)
 
+previous_seq_num = 1
+
+def writeFile(data):
+    
+    file = open('writeFiles/'+filename, 'a+')
+    file.write(data)
+    file.close()
+
 while True:
+    
     data, address = client_socket.recvfrom(1024)
 
     data_length = len(data)
     
     dict_data = ast.literal_eval(data)
     
+    writeFile(dict_data['data'])
+    
     print dict_data
     
     sequence_number = dict_data['seq_num']
     
+    if (int(sequence_number) - previous_seq_num) < 0:
+        client_socket.sendto('failed', server_address)
+        
     received_packets.append(sequence_number)
     
-    client_socket.sendto(str(sequence_number), address)
+    client_socket.sendto(str(sequence_number), server_address)
