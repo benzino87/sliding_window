@@ -11,152 +11,193 @@ import os
 import struct
 import threading
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-#IPADDR = raw_input("Enter IP address: ")
-#PORT = raw_input("Enter PORT num: ")
-
-IPADDR = '127.0.0.1'
-PORT = '9876'
-server_address = (IPADDR, int(PORT))
-
-print'Starting server on: '+ IPADDR
-
-server_socket.bind(server_address)
-
-filename = ''
-fileSize = 0
-
-packetNumber = 0
-
-isFileReadComplete = False
-isFirstIteration = True
-startIndex = 0
-endIndex = 0
-dataSize = 900
-
-failedPacketNumber = 0
-failedSeqNumber = 0
-recievedFailedPacket = False
-
-receivedPackets = []
-
-################################################################################
-### Clears fields when incorrect file is loaded
-### @param: filename
-### @param: isFirstIteration
-################################################################################
-def clearFileFields(filename, isFirstIteration):
-    filename = ''
-    isFirstIteration = False
-    return filename, isFirstIteration
-    
-################################################################################
-### Uses Indexes to load specific portions of the file
-### @param: filename
-### @param: start_index
-### @param: end_index
-### @param: isFileReadComplete
-################################################################################
-def getPackets(filename, startIndex, endIndex, isFileReadComplete):
-    try:
-        if endIndex > fileSize:
-            endIndex = fileSize
-            isFileReadComplete = True
+class server(object):
+    def __init__(self, ipaddress, port):
+        self.ipaddress = ipaddress
+        self.port = port
+        self.filename = ''
+        self.fileSize = 0
+        self.packetNumber = 0
+        self.endOfFile = '0'
+        self.receivedFailedPacket = False
+        self.isFirstIteration = True
+        self.startIndex = 0
+        self.endIndex = 0
+        self.dataSize = 900
+        self.failedPacketNumber = 0
+        self.failedSeqNumber = 0
+        self.receivedPackets = []
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.server_address = (self.ipaddress, self.port)
+        self.server_socket.bind(self.server_address)
+        print 'listening on: '+ self.ipaddress
         
-        with open(filename) as fin:
-            fin.seek(startIndex)
-            data = fin.read(endIndex - startIndex)
-        
-        if '.jpg' in filename:
-            data = data.encode('hex')
-    except IOError as e:
-        isFileReadComplete = False
-        print 'file request: ' + filename
-        raise Exception
+    ################################################################################
+    ### Clears fields when incorrect file is loaded
+    ### @param: filename
+    ### @param: isFirstIteration
+    ################################################################################
+    def clearFileFields(self):
+        self.filename = ''
+        self.isFirstIteration = False
     
-    return data, isFileReadComplete
-
-################################################################################
-### Handles manipulating indexes, packet numbers and sequence numbers when the  
-### server detects that the client did not receieve a package
-### @param: sequenceNumber 
-### @param: packetNumber
-################################################################################
-def checkFailedPacketResponse(sequenceNumber, packetNumber):
-    if sequenceNumber == 5 and recievedFailedPacket:
-        if failedSeqNumber == 1:
+    ################################################################################
+    ### Uses Indexes to load specific portions of the file
+    ### @param: filename
+    ### @param: start_index
+    ### @param: end_index
+    ### @param: isFileReadComplete
+    ################################################################################
+    def getPacket(self):
+        try:
+            if self.endIndex > self.fileSize:
+                self.endIndex = self.fileSize
+                self.endOfFile = '1'
+            
+            with open(self.filename) as fin:
+                fin.seek(self.startIndex)
+                data = fin.read(self.endIndex - self.startIndex)
+    
+        except IOError as e:
+            isFileReadComplete = False
+            print 'file request: ' + self.filename
+            raise Exception
+        
+        return data
+    
+    ############################################################################
+    ### Handles manipulating indexes, packet numbers and sequence numbers when   
+    ### the server detects that the client did not receieve a package
+    ### @param: sequenceNumber 
+    ### @param: packetNumber
+    ############################################################################
+    def checkFailedPacketResponse(self, sequenceNumber):
+        if sequenceNumber == 5 and self.receivedFailedPacket:
+            if self.failedSeqNumber == 1:
+                sequenceNumber = 1
+                self.packetNumber = self.packetNumber - 5
+                self.startIndex = self.startIndex - (self.dataSize*5)
+                self.endIndex = self.endIndex - (self.dataSize*5)
+            else:
+                sequenceNumber = 1
+                self.packetNumber = self.failedPacketNumber - self.failedSeqNumber
+                self.startIndex = self.startIndex - (self.dataSize*self.failedSeqNumber)
+                self.endIndex = self.endIndex - (self.dataSize*self.failedSeqNumber)
+        if sequenceNumber == 5 and not self.receivedFailedPacket:
             sequenceNumber = 1
-            packetNumber = packetNumber - 5
-            startIndex = startIndex - (dataSize*5)
-            endIndex = endIndex - (dataSize*5)
         else:
-            sequenceNumber = 1
-            packetNumber = failedPacketNumber - failedSeqNumber
-            startIndex = startIndex - (dataSize*failedSeqNumber)
-            endIndex = endIndex - (dataSize*failedSeqNumber)
+            sequenceNumber += 1
+            self.packetNumber += 1
+        return sequenceNumber
     
-    if sequenceNumber == 5 and not recievedFailedPacket:
+    ############################################################################  
+    ###
+    ###Determines indexes for each file load
+    ###
+    ############################################################################
+    def setIndexesForDataFetch(self):
+        
+        if  self.isFirstIteration:
+            self.startIndex = 0
+            self.endIndex = self.dataSize
+            self.isFirstIteration = False
+        else:
+            self.startIndex += self.dataSize
+            self.endIndex += self.dataSize
+
+    ############################################################################  
+    ###
+    ###Checks to see if the file exists, sets the filename. otherwise notifies
+    ###client that file does not exist
+    ###@param: address
+    ###@param: data
+    ###
+    ############################################################################    
+    def checkFileNameIntegrity(self, address, data):
+        try:
+            self.fileSize = os.path.getsize(data)
+            self.filename = data
+            return True
+        except OSError:
+            self.server_socket.sendto('FNF', address)
+            return False
+    ############################################################################  
+    ###
+    ###Opens server socket to recieve initial file request from client
+    ###
+    ############################################################################           
+    def listenForFileName(self):
+        
+        #Receive file request from client
+        data, address = self.server_socket.recvfrom(1024)
+        
+        print 'File Request: ' + data
+        if self.checkFileNameIntegrity(address, data) == True:
+            self.sendPackets(address)
+        else:
+            print 'File does not exist'
+            self.listenForFileName()
+    
+    def checkConfirmationPacket(self, sequenceNumber):
+        data = self.server_socket.recvfrom(1024)
+        self.server_socket.settimeout(2)
+        if data == sequenceNumber:
+            return True
+        else:
+            return False
+        
+    ############################################################################  
+    ###
+    ###Method that handles sending packets within the sliding window number
+    ###
+    ############################################################################ 
+    def sendPackets(self, address):
         sequenceNumber = 1
-    else:
-        sequenceNumber += 1
-        packetNumber += 1
+        
+        while sequenceNumber <= 5:
+            self.setIndexesForDataFetch()
+            data = self.getPacket()
+            packet = ({'sNum': sequenceNumber, 'pNum': self.packetNumber, 
+                        'data': data, 'EOF' : self.endOfFile })
+            self.server_socket.sendto(str(packet), address)
+            
+            if self.endOfFile == '1':
+                break
+            else:
+                if sequenceNumber == 5:
+                    sequenceNumber = 1
+                else:
+                    sequenceNumber += 1
+                
+                self.packetNumber += 1
+            
+def main():
     
-    return sequenceNumber, packetNumber
-
-################################################################################    
-###
-###Determines indexes for each file load
-###
-################################################################################
-def setIndexesForDataFetch(isFirstIteration, startIndex, endIndex):
-    if isFirstIteration:
-        startIndex = 0
-        endIndex = dataSize
-        isFirstIteration = False
-    else:
-        startIndex += dataSize
-        endIndex += dataSize
-    return isFirstIteration, startIndex, endIndex
-
-def checkFileNameIntegrity(filename, address):
-    try:
-        fileSize = os.path.getsize(filename)
-        return fileSize
-    except OSError:
-        server_socket.sendto('FNF', address)
-        
-
-def listenForFileName():
-        
-    #Receive file request from client
-    data, address = server_socket.recvfrom(1024)
-        
-    fileSize = checkFileNameIntegrity(data, address)
-        
-    #Fetch data size for indexing file loads
-    filename = data
-    try:
-        fileSize = os.path.getsize(filename)
-        sendPackets(filename, address, fileSize)
-    except OSError:
-        print 'File not found'
-        listenForFileName()
-        
-def sendPackets(filename, address, fileSize):
+    #IPADDR = raw_input("Enter IP address: ")
+    #PORT = raw_input("Enter PORT num: ")
+    #PORT = int(PORT)
     
-    server_socket.settimeout(2)
-    sequenceNumber = 1
+    #debugging convinience
+    IPADDR = '127.0.0.1'
+    PORT = 9876
     
-    while sequenceNumber <= 5:
-        isFirstIteration, startIndex, endIndex = setIndexesForDataFetch(isFirstIteration, startIndex, endIndex)
-        data, isFileReadComplete = getPackets(filename, startIndex, endIndex, isFileReadComplete)
+    s = server(IPADDR, PORT)
+    s.listenForFileName()
+    
+main()
+
+
+
+
+    
+
+
+
+
+
         
-        packetNumber += 1
-        
-        packet = ({'seq_num': sequenceNumber, 'packet_number': packetNumber, 'data': data})
-        
-        server_socket.sendto(packet, address)
+
+
         
         
         
@@ -206,7 +247,7 @@ def sendPackets(filename, address, fileSize):
     #     if isFileReadComplete == True:
     #         break
         
-listenForFileName()
+# listenForFileName()
 
 
     
