@@ -9,37 +9,48 @@ import sys
 import socket
 import os
 import struct
+import threading
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 #IPADDR = raw_input("Enter IP address: ")
-#PORT = raw_input("Enter PORT num")
+#PORT = raw_input("Enter PORT num: ")
 
 IPADDR = '127.0.0.1'
-PORT = 9876
-server_address = (IPADDR, PORT)
+PORT = '9876'
+server_address = (IPADDR, int(PORT))
 
 print'Starting server on: '+ IPADDR
 
 server_socket.bind(server_address)
 
-isFirstIteration = True
-isFileReadComplete = False
 filename = ''
 fileSize = 0
 
-packetNumber = 1
+packetNumber = 0
 
-start_index = 0
-end_index = 0
-data_size = 900
+isFileReadComplete = False
+isFirstIteration = True
+startIndex = 0
+endIndex = 0
+dataSize = 900
 
 failedPacketNumber = 0
 failedSeqNumber = 0
 recievedFailedPacket = False
 
-received_packets = []
+receivedPackets = []
 
+################################################################################
+### Clears fields when incorrect file is loaded
+### @param: filename
+### @param: isFirstIteration
+################################################################################
+def clearFileFields(filename, isFirstIteration):
+    filename = ''
+    isFirstIteration = False
+    return filename, isFirstIteration
+    
 ################################################################################
 ### Uses Indexes to load specific portions of the file
 ### @param: filename
@@ -47,19 +58,23 @@ received_packets = []
 ### @param: end_index
 ### @param: isFileReadComplete
 ################################################################################
-def getPackets(filename, start_index, end_index, isFileReadComplete):
+def getPackets(filename, startIndex, endIndex, isFileReadComplete):
+    try:
+        if endIndex > fileSize:
+            endIndex = fileSize
+            isFileReadComplete = True
+        
+        with open(filename) as fin:
+            fin.seek(startIndex)
+            data = fin.read(endIndex - startIndex)
+        
+        if '.jpg' in filename:
+            data = data.encode('hex')
+    except IOError as e:
+        isFileReadComplete = False
+        print 'file request: ' + filename
+        raise Exception
     
-    if end_index > fileSize:
-        end_index = fileSize
-        isFileReadComplete = True
-        
-    with open(filename) as fin:
-        fin.seek(start_index)
-        data = fin.read(end_index - start_index)
-        
-    if '.jpg' in filename:
-        data = data.encode('hex')
-
     return data, isFileReadComplete
 
 ################################################################################
@@ -73,13 +88,13 @@ def checkFailedPacketResponse(sequenceNumber, packetNumber):
         if failedSeqNumber == 1:
             sequenceNumber = 1
             packetNumber = packetNumber - 5
-            start_index = start_index - (data_size*5)
-            end_index = end_index - (data_size*5)
+            startIndex = startIndex - (dataSize*5)
+            endIndex = endIndex - (dataSize*5)
         else:
             sequenceNumber = 1
             packetNumber = failedPacketNumber - failedSeqNumber
-            start_index = start_index - (data_size*failedSeqNumber)
-            end_index = end_index - (data_size*failedSeqNumber)
+            startIndex = startIndex - (dataSize*failedSeqNumber)
+            endIndex = endIndex - (dataSize*failedSeqNumber)
     
     if sequenceNumber == 5 and not recievedFailedPacket:
         sequenceNumber = 1
@@ -88,64 +103,110 @@ def checkFailedPacketResponse(sequenceNumber, packetNumber):
         packetNumber += 1
     
     return sequenceNumber, packetNumber
-    
+
+################################################################################    
+###
+###Determines indexes for each file load
+###
+################################################################################
+def setIndexesForDataFetch(isFirstIteration, startIndex, endIndex):
+    if isFirstIteration:
+        startIndex = 0
+        endIndex = dataSize
+        isFirstIteration = False
+    else:
+        startIndex += dataSize
+        endIndex += dataSize
+    return isFirstIteration, startIndex, endIndex
+
+def checkFileNameIntegrity(filename, address):
+    try:
+        fileSize = os.path.getsize(filename)
+        return fileSize
+    except OSError:
+        server_socket.sendto('FNF', address)
         
-while True:
-    
+
+def listenForFileName():
+        
     #Receive file request from client
     data, address = server_socket.recvfrom(1024)
-    
-    if isFirstIteration:
-        #Look for file requested and send to client
-        filename = data
-        fileSize = os.path.getsize(filename)
         
+    fileSize = checkFileNameIntegrity(data, address)
+        
+    #Fetch data size for indexing file loads
+    filename = data
+    try:
+        fileSize = os.path.getsize(filename)
+        sendPackets(filename, address, fileSize)
+    except OSError:
+        print 'File not found'
+        listenForFileName()
+        
+def sendPackets(filename, address, fileSize):
     
+    server_socket.settimeout(2)
     sequenceNumber = 1
     
     while sequenceNumber <= 5:
+        isFirstIteration, startIndex, endIndex = setIndexesForDataFetch(isFirstIteration, startIndex, endIndex)
+        data, isFileReadComplete = getPackets(filename, startIndex, endIndex, isFileReadComplete)
+        
+        packetNumber += 1
+        
+        packet = ({'seq_num': sequenceNumber, 'packet_number': packetNumber, 'data': data})
+        
+        server_socket.sendto(packet, address)
+        
+        
+        
+    # sequenceNumber = 1
     
-        if isFirstIteration:
-            start_index = 0
-            end_index = data_size
-            isFirstIteration = False
-        else:
-            start_index += data_size
-            end_index += data_size
-            
-        data, isFileReadComplete = getPackets(filename, start_index, end_index, isFileReadComplete)
+    # while sequenceNumber <= 5:
         
-        packet = ({'seq_num': sequenceNumber,'packet_number': packetNumber, 'data': data})
         
-        #debugging
-        #print packet
+    #     isFirstIteration, startIndex, endIndex = setIndexesForDataFetch(isFirstIteration, startIndex, endIndex)
         
-        string_packet = str(packet)
+    #     try:
+    #         data, isFileReadComplete = getPackets(filename, startIndex, endIndex, isFileReadComplete)
+    #     except Exception:
+    #         server_socket.sendto('FNF', address)
+    #         filename, isFirstIteration = clearFileFields(filename, isFirstIteration)
+    #         break
         
-        #print string_packet
+    #     server_socket.settimeout(2)
         
-        server_socket.sendto(string_packet, address)
-        print 'Sent: ' + str(sequenceNumber)
+    #     packet = ({'seq_num': sequenceNumber, 'packet_number': packetNumber, 'data': data})
         
-        #Receive file request from client
-        confirmation_data, address = server_socket.recvfrom(1024)
+    #     #debugging
+    #     #print packet
         
-        print 'Confirmation: ' + confirmation_data
+    #     string_packet = str(packet)
         
-        #Check for packet failed notification
-        if confirmation_data == 'failed':
-            failedPacketNumber = packetNumber
-            failedSeqNumber = sequenceNumber
-            recievedFailedPacket = True
+    #     #print string_packet
         
-        received_packets.append(confirmation_data)
+    #     server_socket.sendto(string_packet, address)
+    #     print 'Sent: ' + str(sequenceNumber)
         
-        sequenceNumber, packetNumber = checkFailedPacketResponse(sequenceNumber, packetNumber)
+    #     #Receive file request from client
+    #     confirmation_data, address = server_socket.recvfrom(1024)
         
-        if isFileReadComplete == True:
-            break
-    
-
+    #     print 'Confirmation: ' + confirmation_data
+        
+    #     #Check for packet failed notification
+    #     if confirmation_data == 'failed':
+    #         failedPacketNumber = packetNumber
+    #         failedSeqNumber = sequenceNumber
+    #         recievedFailedPacket = True
+        
+    #     receivedPackets.append(confirmation_data)
+        
+    #     sequenceNumber, packetNumber = checkFailedPacketResponse(sequenceNumber, packetNumber)
+        
+    #     if isFileReadComplete == True:
+    #         break
+        
+listenForFileName()
 
 
     
