@@ -17,13 +17,13 @@ class server(object):
         self.port = port
         self.filename = ''
         self.fileSize = 0
-        self.packetNumber = 0
+        self.packetNumber = 1
         self.endOfFile = '0'
         self.receivedFailedPacket = False
         self.isFirstIteration = True
         self.startIndex = 0
         self.endIndex = 0
-        self.dataSize = 900
+        self.dataSize = 0
         self.failedPacketNumber = 0
         self.failedSeqNumber = 0
         self.receivedPackets = []
@@ -48,7 +48,7 @@ class server(object):
     ### @param: end_index
     ### @param: isFileReadComplete
     ################################################################################
-    def getPacket(self):
+    def getPacketFromFile(self):
         try:
             if self.endIndex > self.fileSize:
                 self.endIndex = self.fileSize
@@ -59,7 +59,6 @@ class server(object):
                 data = fin.read(self.endIndex - self.startIndex)
     
         except IOError as e:
-            isFileReadComplete = False
             print 'file request: ' + self.filename
             raise Exception
         
@@ -71,23 +70,11 @@ class server(object):
     ### @param: sequenceNumber 
     ### @param: packetNumber
     ############################################################################
-    def checkFailedPacketResponse(self, sequenceNumber):
-        if sequenceNumber == 5 and self.receivedFailedPacket:
-            if self.failedSeqNumber == 1:
-                sequenceNumber = 1
-                self.packetNumber = self.packetNumber - 5
-                self.startIndex = self.startIndex - (self.dataSize*5)
-                self.endIndex = self.endIndex - (self.dataSize*5)
-            else:
-                sequenceNumber = 1
-                self.packetNumber = self.failedPacketNumber - self.failedSeqNumber
-                self.startIndex = self.startIndex - (self.dataSize*self.failedSeqNumber)
-                self.endIndex = self.endIndex - (self.dataSize*self.failedSeqNumber)
-        if sequenceNumber == 5 and not self.receivedFailedPacket:
-            sequenceNumber = 1
-        else:
-            sequenceNumber += 1
-            self.packetNumber += 1
+    def resetIndexesGivenFailedPacketResponse(self, sequenceNumber):
+        sequenceNumber = 1
+        self.packetNumber = self.failedPacketNumber
+        self.startIndex = self.dataSize*self.failedPacketNumber
+        self.endIndex = (self.dataSize*self.failedPacketNumber) + self.dataSize
         return sequenceNumber
     
     ############################################################################  
@@ -96,7 +83,6 @@ class server(object):
     ###
     ############################################################################
     def setIndexesForDataFetch(self):
-        
         if  self.isFirstIteration:
             self.startIndex = 0
             self.endIndex = self.dataSize
@@ -104,6 +90,12 @@ class server(object):
         else:
             self.startIndex += self.dataSize
             self.endIndex += self.dataSize
+    
+    def setDataSize(self, data):
+        if '.txt' in data:
+            self.dataSize = 900
+        else:
+            self.dataSize = 200
 
     ############################################################################  
     ###
@@ -117,6 +109,7 @@ class server(object):
         try:
             self.fileSize = os.path.getsize(data)
             self.filename = data
+            self.setDataSize(data)
             return True
         except OSError:
             self.server_socket.sendto('FNF', address)
@@ -132,7 +125,7 @@ class server(object):
         data, address = self.server_socket.recvfrom(1024)
         
         print 'File Request: ' + data
-        if self.checkFileNameIntegrity(address, data) == True:
+        if self.checkFileNameIntegrity(address, data):
             self.sendPackets(address)
         else:
             print 'File does not exist'
@@ -145,31 +138,45 @@ class server(object):
             return True
         else:
             return False
-        
+    
+    def calculateCheckSum(self):
+        return 0
+    
     ############################################################################  
     ###
-    ###Method that handles sending packets within the sliding window number
+    ###Method that handles sending packets within the sliding window
     ###
     ############################################################################ 
     def sendPackets(self, address):
         sequenceNumber = 1
         
         while sequenceNumber <= 5:
-            self.setIndexesForDataFetch()
-            data = self.getPacket()
-            packet = ({'sNum': sequenceNumber, 'pNum': self.packetNumber, 
-                        'data': data, 'EOF' : self.endOfFile })
-            self.server_socket.sendto(str(packet), address)
-            
-            if self.endOfFile == '1':
-                break
-            else:
+            try:
+                self.setIndexesForDataFetch()
+                data = self.getPacketFromFile()
+                packet = ({'sNum': sequenceNumber, 'pNum': self.packetNumber, 
+                            'data': data, 'EOF' : self.endOfFile, 'checksum': 0 })
+                            
+                self.server_socket.sendto(str(packet).encode('utf-8'), address)
+                print 'Sent: ' + str(packet['sNum'])
+                
+                response = self.server_socket.recvfrom(1024)
+                print 'Received: ' + response[0]
+                
+                if self.endOfFile == '1':
+                    break
+                
                 if sequenceNumber == 5:
                     sequenceNumber = 1
+                    self.packetNumber += 1
                 else:
                     sequenceNumber += 1
-                
-                self.packetNumber += 1
+                    self.packetNumber += 1
+            
+            except socket.timeout:
+                self.failedSeqNumber = sequenceNumber
+                self.failedPacketNumber = self.packetNumber
+                sequenceNumber = self.resetIndexesGivenFailedPacketResponse(self.failedPacketNumber)
             
 def main():
     

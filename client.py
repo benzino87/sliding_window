@@ -14,26 +14,28 @@ class client(object):
     def __init__(self, ipaddress, port):
         self.ipaddress = ipaddress
         self.port = port
-        self.receivedPackets = []
         self.previousSeqNum = 1
+        self.receivedPackets = []
+        self.data = []
         self.receivedSequenceNumbers = []
+        self.filename = ''
         self.hasPacketLoss = False
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_address = (self.ipaddress, self.port)
         
         
     def requestNewFileName(self):
-        filename = raw_input('Enter a file name: ')
-        self.client_socket.sendto(filename, self.server_address)
+        self.filename = raw_input('Enter a file name: ')
+        self.client_socket.sendto(self.filename, self.server_address)
         try:
-            self.beginPacketHandling(filename)
+            self.beginPacketHandling(self.filename)
         except Exception as e:
-            print e
-            # self.requestNewFileName()
+            self.requestNewFileName()
     
-    def writeFile(self, data, filename):
-        file = open('writeFiles/'+filename, 'a+')
-        file.write(data)
+    def writeFile(self):
+        file = open('writeFiles/'+self.filename, 'a+')
+        for data in self.data:
+            file.write(data)
         file.close()
         
     def parsePacketData(self, bytes):
@@ -42,9 +44,21 @@ class client(object):
         sequenceNumber = packetData['sNum']
         packetNumber = packetData['pNum']
         endOfFile = packetData['EOF']
+        checksum = packetData['checksum']
         dataLength = len(packetData)
         print packetData
-        return data, sequenceNumber, packetNumber, endOfFile, dataLength
+        return data, sequenceNumber, packetNumber, endOfFile, dataLength, checksum
+    
+    def constructFileAndSetPacketNumbers(self, data, sequenceNumber, packetNumber):
+        #check if packet already exists 
+        #check incoming packet vs larges packet
+        self.receivedSequenceNumbers.append(sequenceNumber)
+        self.receivedPackets.append(packetNumber)
+        self.data.append(data)
+    
+    def calculateCheckSum(self):
+        return 0
+        
     ############################################################################
     ###
     ###TODO check for all files
@@ -54,6 +68,7 @@ class client(object):
     ############################################################################
     def checkFileIntegrityWithEndFileFlag(self, endOfFile):
         if endOfFile == '1':
+            self.writeFile()
             self.client_socket.close()
             return True
         else:
@@ -65,14 +80,17 @@ class client(object):
                 self.client_socket.settimeout(2)
                 bytes, address = self.client_socket.recvfrom(1024)
                 
+                bytes = bytes.decode('utf-8')
+                
                 if bytes == 'FNF':
                     print 'File Not Found'
                     raise Exception
                 
-                data, sequenceNumber, packetNumber, endOfFile, dataLength = self.parsePacketData(bytes)
-                self.writeFile(data, filename)
-                self.receivedSequenceNumbers.append(sequenceNumber)
-                self.receivedPackets.append(packetNumber)
+                data, sequenceNumber, packetNumber, endOfFile, dataLength, checksum = self.parsePacketData(bytes)
+                # self.writeFile(data, filename)
+                self.constructFileAndSetPacketNumbers(data, sequenceNumber, packetNumber)
+                
+                self.client_socket.sendto(str(sequenceNumber), self.server_address)
                 
                 if self.checkFileIntegrityWithEndFileFlag(endOfFile):
                     break
