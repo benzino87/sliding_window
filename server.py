@@ -11,8 +11,15 @@ import os
 import struct
 import threading
 import ast
+import hashlib
+
 
 class server(object):
+    ############################################################################
+    ###
+    ### SERVER CONSTRUCTOR
+    ###
+    ############################################################################
     def __init__(self, ipaddress, port):
         self.ipaddress = ipaddress
         self.port = port
@@ -37,32 +44,21 @@ class server(object):
         self.server_socket.bind(self.server_address)
         print 'listening on: '+ self.ipaddress
     
-    def sendPacketAndListenForAcknowledgement(self, packet):
-        try:
-            self.server_socket.sendto(str(packet), self.client_address)
-            bytes = self.server_socket.recvfrom(1024)
-            data = ast.literal_eval(bytes[0])
-        except socket.timeout as te:
-            data = self.sendPacketAndListenForAcknowledgement(packet)
-        return data  
-    
 
-    ################################################################################
+    ############################################################################
+    ###
     ### Clears fields when incorrect file is loaded
-    ### @param: filename
-    ### @param: isFirstIteration
-    ################################################################################
+    ###
+    ############################################################################
     def clearFileFields(self):
         self.filename = ''
         self.isFirstIteration = False
     
-    ################################################################################
+    ############################################################################
+    ###
     ### Uses Indexes to load specific portions of the file
-    ### @param: filename
-    ### @param: start_index
-    ### @param: end_index
-    ### @param: isFileReadComplete
-    ################################################################################
+    ###
+    ############################################################################
     def getPacketFromFile(self):
         try:
             if self.endIndex > self.fileSize:
@@ -80,10 +76,10 @@ class server(object):
         return data
     
     ############################################################################
+    ###
     ### Handles manipulating indexes, packet numbers and sequence numbers when   
     ### the server detects that the client did not receieve a package
-    ### @param: sequenceNumber 
-    ### @param: packetNumber
+    ###
     ############################################################################
     def resetIndexesGivenFailedPacketResponse(self):
         self.packetNumber = self.failedPacketNumber
@@ -93,7 +89,7 @@ class server(object):
     
     ############################################################################  
     ###
-    ###Determines indexes for each file load
+    ### Determines indexes for each file load
     ###
     ############################################################################
     def setIndexesForDataFetch(self):
@@ -105,6 +101,13 @@ class server(object):
             self.startIndex += self.dataSize
             self.endIndex += self.dataSize
     
+    ############################################################################  
+    ###
+    ### Dynamically sets the file size based on the requested file extension
+    ###
+    ### @param data
+    ###
+    ############################################################################  
     def setDataSize(self, data):
         if '.txt' in data:
             self.dataSize = 900
@@ -113,10 +116,10 @@ class server(object):
 
     ############################################################################  
     ###
-    ###Checks to see if the file exists, sets the filename. otherwise notifies
-    ###client that file does not exist
-    ###@param: address
-    ###@param: data
+    ### Checks to see if the file exists, sets the filename. otherwise notifies
+    ### client that file does not exist
+    ### @param: address
+    ### @param: data
     ###
     ############################################################################    
     def checkFileNameIntegrity(self, data):
@@ -129,9 +132,10 @@ class server(object):
         except OSError:
             packet = ({'alert': 'FNF'})
             return packet
+    
     ############################################################################  
     ###
-    ###Opens server socket to recieve initial file request from client
+    ### Opens server socket to recieve initial file request from client
     ###
     ############################################################################           
     def listenForFileName(self):
@@ -156,20 +160,26 @@ class server(object):
             self.server_socket.sendto(str(packet), self.client_address)
             self.sendPackets()
             print 'success'
-        
-        
-        # if self.checkFileNameIntegrity(address, data):
-        #     self.sendFileSizePacket(address)
-        #     # self.sendPackets(address)
-        # ELSE:
-        #     print 'File does not exist'
-        #     self.listenForFileName()
     
+    ##########################################################################  
+    ###
+    ### Sends inital file size to client and listens for acknowledgement
+    ###
+    ### @param address
+    ###
+    ##########################################################################  
     def sendFileSizePacket(self, address):
         packet = ({'fsize': self.fileSize, 'psize': self.dataSize})
         self.server_socket.sendto(str(packet), address)
         self.listenForAcknowledgement(address)
-        
+     
+    ##########################################################################  
+    ###
+    ### Listens for acknowledgement for receieved packet size
+    ###
+    ### @param address
+    ###
+    ##########################################################################    
     def listenForAcknowledgement(self, address):
         try:
             self.server_socket.settimeout(2)
@@ -177,6 +187,13 @@ class server(object):
         except socket.timeout as te:
             self.sendFileSizePacket(address)
     
+    ##########################################################################  
+    ###
+    ### Sends bursts of packets in a window size of 5
+    ###
+    ### @param sequenceNumber
+    ###
+    ##########################################################################  
     def checkConfirmationPacket(self, sequenceNumber):
         data = self.server_socket.recvfrom(1024)
         self.server_socket.settimeout(2)
@@ -185,102 +202,101 @@ class server(object):
         else:
             return False
     
-    def calculateCheckSum(self):
-        return 0
+    ##########################################################################  
+    ###
+    ### Calculates checksum on data
+    ###
+    ### @param packet
+    ###
+    ##########################################################################  
+    def calculateCheckSum(self, packet):
+        checksum = hashlib.md5(str(packet)).hexdigest()
+        return checksum
     
+    ##########################################################################  
+    ###
+    ### Receives responses from client, sets indexes according to failed 
+    ### responses
+    ###
+    ### @param bytes
+    ###
+    ##########################################################################  
     def verifyResponsePacket(self, bytes):
         packetData = ast.literal_eval(bytes)
-        if packetData['status'] == '0':
-            self.failedSeqNumber = int(packetData['sNum'])
-            sequenceNumber = self.resetIndexesGivenFailedPacketResponse()
-            return sequenceNumber, 'Failed: ' + str(self.failedSeqNumber), True
-        else:
-            sequenceNumber = int(packetData['sNum'])
-            return sequenceNumber, 'Received: ' + str(sequenceNumber), False
-            
+        sequenceNumber = int(packetData['sNum'])
+        print 'Received: ' +str(sequenceNumber)
+        self.acknowledgedSequenceNumber[sequenceNumber - 1] = True
+    
+    ##########################################################################  
+    ### 
+    ### Constructs 5 packets from file and saves them to an array to be send
+    ###
+    ##########################################################################          
     def constructPackets(self):
         sequenceNumber = 1
         while sequenceNumber <= 5:
             self.setIndexesForDataFetch()
             data = self.getPacketFromFile()
             packet = ({'sNum': sequenceNumber, 'pNum': self.packetNumber, 
-                        'data': data, 'EOF' : self.endOfFile, 'checksum': 0 })
+                        'data': data, 'EOF' : self.endOfFile})
+            checksum = self.calculateCheckSum(packet)
+            packet['checksum'] = checksum
             self.windowPackets.append(packet)
             sequenceNumber +=1
             self.packetNumber += 1
         self.sendPacketsInWindow(packet)
     
+    ##########################################################################  
+    ### 
+    ### Sends bursts of packets in a window size of 5
+    ###
+    ### @param packet
+    ### 
+    ##########################################################################   
     def sendPacketsInWindow(self, packet):
         for packet in self.windowPackets:
             try:
                 self.server_socket.sendto(str(packet), self.client_address)
+                print 'Sent: ' + str(packet['sNum'])
                 bytes = self.server_socket.recvfrom(1024)
-                data = bytes[0]
-                data = ast.literal_eval(data)
-                self.acknowledgedSequenceNumber[int(data['sNum'])-1] = True
-                self.acknowledgedPackets[int(data['sNum'])-1] = int(data['pNum'])
+                self.verifyResponsePacket(bytes[0])
+                
             except socket.timeout as st:
-                continue
+                self.failedPacketNumber = packet['pNum']
+                self.failedSeqNumber = packet['sNum']
+                self.resetIndexesGivenFailedPacketResponse()
+                break
         self.windowPackets = []
-            
+        
+    
+    ##########################################################################  
+    ### 
+    ### Checks for failed package acknowledgements and adjusts window accordingly
+    ### 
+    ##########################################################################     
     def checkResponsesAndAdjustWindow(self):
         for i in range(len(self.acknowledgedPackets)):
             if self.acknowledgedPackets[i] == False:
                 self.failedPacketNumber = self.acknowledgedPackets[i-1] + 1
                 break
-            
-        
-        
-                
+
     ##########################################################################  
-    #
-    #Method that handles sending packets within the sliding window
-    #
+    ### 
+    ### Method that handles sending packets within the sliding window
+    ### 
     ########################################################################## 
     def sendPackets(self):
         while True:
             self.constructPackets()
             self.checkResponsesAndAdjustWindow()
-            if self.endOfFile == '1':
+            if self.endOfFile == 1:
                 break
         
-        
-    #     # quenceNumber = 1
-        
-    #   wh# ile sequenceNumber <= 5:
-    #     #   try:
-    #     #       self.setIndexesForDataFetch()
-    #     #       data = self.getPacketFromFile()
-    #     #       packet = ({'sNum': sequenceNumber, 'pNum': self.packetNumber, 
-    #     #                   'data': data, 'EOF' : self.endOfFile, 'checksum': 0 })
-                
-    
-                            
-    #           se# lf.server_socket.sendto(str(packet).encode('utf-8'), address)
-    #           pr# int 'Sent: ' + str(packet['sNum'])
-                
-    #           re# sponse = self.server_socket.recvfrom(1024)
-                
-    #         #   sequenceNumber, result, receivedFailed = self.verifyResponsePacket(response[0])
-    #         #   print result
-                
-                
-    #         #   if receivedFailed == False:
-    #         #       if self.endOfFile == '1':
-    #         #           break
-                    
-    #         #       if sequenceNumber == 5:
-    #         #           sequenceNumber = 1
-    #         #           self.packetNumber += 1
-    #         #       else:
-    #         #           sequenceNumber += 1
-    #         #           self.packetNumber += 1
-            
-    #       ex# cept socket.timeout:
-    #         #   self.failedSeqNumber = sequenceNumber
-    #         #   self.failedPacketNumber = self.packetNumber
-    #         #   sequenceNumber = self.resetIndexesGivenFailedPacketResponse(self.failedPacketNumber)
-            
+################################################################################
+###
+### Prompts user for IP and Port. Creates new instance of server
+###
+################################################################################
 def main():
     
     #IPADDR = raw_input("Enter IP address: ")
