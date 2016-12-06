@@ -67,7 +67,6 @@ class client(object):
             else:
                 self.fileSize = data['fsize']
                 self.packetSize = data['psize']
-                #self.expectedPackets = self.fileSize / self.packetSize
                 self.beginPacketHandling()
         except socket.timeout as te:
             print 'No response from server'
@@ -167,6 +166,7 @@ class client(object):
     def beginPacketHandling(self):
         while True:
             try:
+                self.client_socket.settimeout(2)
                 bytes, address = self.client_socket.recvfrom(1024)
                 bytes = bytes.decode('utf-8')
                 data, sequenceNumber, packetNumber, endOfFile, dataLength, receivedChecksum, calculatedChecksum = self.parsePacketData(bytes)
@@ -183,7 +183,7 @@ class client(object):
 
             except socket.timeout as te:
                 print 'packet not received'
-                self.beginPacketHandling()
+                continue
                 
 
 

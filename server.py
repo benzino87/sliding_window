@@ -64,6 +64,8 @@ class server(object):
             if self.endIndex > self.fileSize:
                 self.endIndex = self.fileSize
                 self.endOfFile = '1'
+            else:
+                self.endOfFile = '0'
             
             with open(self.filename) as fin:
                 fin.seek(self.startIndex)
@@ -256,6 +258,7 @@ class server(object):
     def sendPacketsInWindow(self, packet):
         for packet in self.windowPackets:
             try:
+                self.server_socket.settimeout(.2)
                 self.server_socket.sendto(str(packet), self.client_address)
                 print 'Sent: ' + str(packet['sNum'])
                 bytes = self.server_socket.recvfrom(1024)
@@ -264,6 +267,8 @@ class server(object):
             except socket.timeout as st:
                 self.failedPacketNumber = packet['pNum']
                 self.failedSeqNumber = packet['sNum']
+                if self.failedPacketNumber == '1':
+                    self.isFirstIteration = True
                 self.resetIndexesGivenFailedPacketResponse()
                 break
         self.windowPackets = []
@@ -311,9 +316,6 @@ def main():
     s.listenForFileName()
     
 main()
-
-
-
 
     
 
